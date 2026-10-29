@@ -9,7 +9,7 @@
         "crypto",
         "include_gen",
         "include",
-        "LICENSE",
+        "LICENSE.txt",
         "providers",
         "README.md",
         "ssl",
