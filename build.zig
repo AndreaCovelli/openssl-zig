@@ -963,7 +963,7 @@ fn libcrypto(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         .flags = cflags,
     });
     lib.root_module.linkLibrary(try libprovider(b, target, optimize, android_api_level));
-    lib.linkLibC();
+    lib.root_module.link_libc = true;
     return lib;
 }
 
@@ -1083,7 +1083,7 @@ fn libssl(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin
         },
         .flags = cflags,
     });
-    lib.linkLibC();
+    lib.root_module.link_libc = true;
     return lib;
 }
 
@@ -1368,7 +1368,7 @@ fn libprovider(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.bu
         },
         .flags = cflags,
     });
-    lib.linkLibC();
+    lib.root_module.link_libc = true;
     return lib;
 }
 
@@ -1395,7 +1395,6 @@ const BuildInfo = struct {
 
 const AndroidConfigError = error{
     MissingNdkEnvironment,
-    InvalidNdkPathEncoding,
     UnsupportedHostOperatingSystem,
     UnsupportedHostArchitecture,
     UnsupportedTargetArchitecture,
@@ -1427,20 +1426,12 @@ fn ConfigureAndroidEnvironment(b: *std.Build, compile: *std.Build.Step.Compile, 
 
     const NDK_ENV_VAR = "ANDROID_NDK_HOME";
 
-    const ndk_home = std.process.getEnvVarOwned(b.allocator, NDK_ENV_VAR) catch |err| switch (err) {
-        error.EnvironmentVariableNotFound => {
-            std.log.err("Environment variable '{s}' not found", .{NDK_ENV_VAR});
-            return AndroidConfigError.MissingNdkEnvironment;
-        },
-        error.InvalidWtf8 => {
-            std.log.err("Environment variable '{s}' contains invalid UTF-8 encoding", .{NDK_ENV_VAR});
-            return AndroidConfigError.InvalidNdkPathEncoding;
-        },
-        error.OutOfMemory => return AndroidConfigError.OutOfMemory,
+    const ndk_home = b.graph.environ_map.get(NDK_ENV_VAR) orelse {
+        std.log.err("Environment variable '{s}' not found", .{NDK_ENV_VAR});
+        return AndroidConfigError.MissingNdkEnvironment;
     };
-    defer b.allocator.free(ndk_home);
 
-    std.fs.accessAbsolute(ndk_home, .{}) catch {
+    std.Io.Dir.accessAbsolute(b.graph.io, ndk_home, .{}) catch {
         std.log.err("NDK path not accessible: {s}", .{ndk_home});
         return AndroidConfigError.NdkPathNotFound;
     };
@@ -1486,7 +1477,7 @@ fn ConfigureAndroidEnvironment(b: *std.Build, compile: *std.Build.Step.Compile, 
     const sysroot_path = std.fs.path.join(b.allocator, &.{ ndk_home, "toolchains", "llvm", "prebuilt", host_tag, "sysroot" }) catch return AndroidConfigError.OutOfMemory;
     defer b.allocator.free(sysroot_path);
 
-    std.fs.accessAbsolute(sysroot_path, .{}) catch {
+    std.Io.Dir.accessAbsolute(b.graph.io, sysroot_path, .{}) catch {
         std.log.err("Sysroot not found at: {s}", .{sysroot_path});
         std.log.err("Check if your NDK version matches the expected directory structure.", .{});
         return AndroidConfigError.SysrootNotFound;
@@ -1512,6 +1503,9 @@ fn ConfigureAndroidEnvironment(b: *std.Build, compile: *std.Build.Step.Compile, 
         .include_dir = include_path,
         .sys_include_dir = system_include_path,
         .crt_dir = lib_path,
+        // Zig 0.17 requires cc_dir on Linux targets. The NDK keeps
+        // crtbegin_so.o next to the other CRT objects.
+        .cc_dir = lib_path,
     };
 
     libc_installation.render(&writer.writer) catch {
